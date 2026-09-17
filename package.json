@@ -1,0 +1,24 @@
+{
+  "name": "com.racer.material-symbols",
+  "version": "365.0.0",
+  "displayName": "Material Symbols",
+  "description": "Simplifies the usage of Google's Material Symbols (Icons) in Unity.\n\nOriginal author: Conrado\nUrl: conrado <convalise@gmail.com> (https://github.com/convalise)",
+  "author": {
+    "name": "Racer",
+    "url": "https://github.com/ebukaracer"
+  },
+  "documentationUrl": "https://github.com/ebukaracer/unity-material-symbols-v2#usage-examples",
+  "changelogUrl": "https://github.com/ebukaracer/unity-material-symbols-v2/tags",
+  "licensesUrl": "https://github.com/ebukaracer/unity-material-symbols-v2/blob/v2/LICENSE",
+  "dependencies": {
+    "com.unity.ugui": "1.0.0",
+    "com.unity.textmeshpro": "3.0.6"
+  },
+  "samples": [
+    {
+      "displayName": "Demo",
+      "description": "Demo project for this package",
+      "path": "Samples~/Demo"
+    }
+  ]
+}
