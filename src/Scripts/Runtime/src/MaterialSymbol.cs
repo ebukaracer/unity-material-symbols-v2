@@ -1,0 +1,168 @@
+﻿using UnityEngine;
+using UnityEngine.UI;
+
+namespace Racer.MaterialSymbols.Runtime
+{
+    [HelpURL("https://github.com/ebukaracer/UnityMaterialSymbols?tab=readme-ov-file#setup")]
+    public class MaterialSymbol : Text
+    {
+        [SerializeField] private MaterialSymbolData symbol;
+
+        [SerializeField, Range(0f, 2f)] private float scale = 1f;
+
+        [SerializeField] public bool replaceWithImageComp;
+
+        public MaterialSymbolData Symbol
+        {
+            get => symbol;
+            set
+            {
+                symbol = value;
+                UpdateSymbol();
+            }
+        }
+
+        public char Code
+        {
+            get => symbol.code;
+            set
+            {
+                symbol.code = value;
+                UpdateSymbol();
+            }
+        }
+
+        public bool Fill
+        {
+            get => symbol.fill;
+            set
+            {
+                symbol.fill = value;
+                UpdateSymbol();
+            }
+        }
+
+        public float Scale
+        {
+            get => scale;
+            set
+            {
+                scale = value;
+                UpdateFontSize();
+            }
+        }
+
+        private MaterialSymbolsFontRef _fontRef;
+
+
+        protected override void Start()
+        {
+            base.Start();
+
+            if (string.IsNullOrEmpty(base.text))
+            {
+                Init();
+            }
+
+            if (!font)
+            {
+                UpdateSymbol();
+            }
+        }
+
+#if UNITY_EDITOR
+        protected override void Reset()
+        {
+            base.Reset();
+            Init();
+        }
+
+        protected override void OnValidate()
+        {
+            base.OnValidate();
+            UpdateSymbol();
+            UpdateFontSize();
+        }
+#endif
+
+        /// <summary> Properly initializes base Text class. </summary>
+        private void Init()
+        {
+            symbol = new MaterialSymbolData('\uef55', false);
+
+            // Even-out dimension
+            var rect = rectTransform.rect;
+            rect.width = 100;
+            rect.height = 100;
+
+            base.text = null;
+            font = null;
+            base.color = Color.white;
+            base.material = null;
+            alignment = TextAnchor.MiddleCenter;
+            supportRichText = false;
+            raycastTarget = false;
+            horizontalOverflow = HorizontalWrapMode.Overflow;
+            verticalOverflow = VerticalWrapMode.Overflow;
+
+            UpdateSymbol();
+            UpdateFontSize();
+        }
+
+        /// <summary> Updates font based on fill state. </summary>
+        private void UpdateSymbol()
+        {
+            if (!_fontRef)
+                _fontRef = MaterialSymbolsFontRef.FontRef;
+
+            if (_fontRef)
+                font = symbol.fill ? _fontRef.Filled : _fontRef.Standard;
+
+            base.text = symbol.code.ToString();
+        }
+
+        private void UpdateFontSize()
+        {
+            var rect = rectTransform.rect;
+
+            // Material Symbols visual fill factor
+            const float glyphFillCompensation = 1.38f;
+
+            fontSize = Mathf.FloorToInt(Mathf.Min(rect.width, rect.height) *
+                                        scale *
+                                        glyphFillCompensation);
+        }
+
+        protected override void OnRectTransformDimensionsChange()
+        {
+            base.OnRectTransformDimensionsChange();
+            UpdateFontSize();
+        }
+
+        /// <summary> Converts from Unicode char to hexadecimal string representation. </summary>
+        public static string ConvertCharToHex(char code)
+        {
+            try
+            {
+                return System.Convert.ToString(code, 16);
+            }
+            catch (System.Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary> Converts from hexadecimal string representation to Unicode char. </summary>
+        public static char ConvertHexToChar(string hex)
+        {
+            try
+            {
+                return System.Convert.ToChar(System.Convert.ToInt32(hex, 16));
+            }
+            catch (System.Exception)
+            {
+                return '\0';
+            }
+        }
+    }
+}
