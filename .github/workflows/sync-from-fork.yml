@@ -1,18 +1,21 @@
 name: Selective Sync From Fork
 
 on:
+  # Normal pushes to v2:
+  # only src/** changes will cause UPM publishing/tagging.
   push:
     branches:
-      - master
       - v2
 
+  # Manual run:
+  # explicitly synchronizes the latest master -> v2.
   workflow_dispatch:
     inputs:
       dry_run:
         description: 'Run without committing, pushing, or tagging'
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -43,10 +46,7 @@ jobs:
           fetch-depth: 0
 
       # ----------------------------------------------------------
-      # Configure Git
-      #
-      # master and v2 are expected to exist.
-      # upm is optional and is created during publishing if needed.
+      # Configure Git and fetch latest branches
       # ----------------------------------------------------------
 
       - name: Configure Git
@@ -55,11 +55,14 @@ jobs:
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
+          echo "Fetching latest master and v2..."
+
           git fetch origin \
             master \
             v2 \
             --tags
 
+          # upm may not exist on the first run.
           if git ls-remote \
             --exit-code \
             --heads \
@@ -71,23 +74,17 @@ jobs:
 
           else
             echo "upm branch does not exist yet."
-            echo "It will be created during publishing."
+            echo "It will be created if publishing is required."
           fi
 
       # ----------------------------------------------------------
       # Determine workflow mode
       #
-      # master:
-      #   Sync selected upstream files into v2/src.
+      # MANUAL RUN:
+      #   Always sync latest master -> v2.
       #
-      # v2:
-      #   Publish only when src/** changed.
-      #
-      # First v2 run:
-      #   If upm does not exist, force initial publication.
-      #
-      # Manual v2 run:
-      #   Force publication.
+      # PUSH TO v2:
+      #   Only publish when src/** changed.
       # ----------------------------------------------------------
 
       - name: Determine workflow operation
@@ -102,7 +99,7 @@ jobs:
           echo "Branch: ${{ github.ref_name }}"
 
           # --------------------------------------------------------
-          # Check whether UPM already exists.
+          # Check whether UPM currently exists.
           # --------------------------------------------------------
 
           if git ls-remote \
@@ -115,34 +112,40 @@ jobs:
           fi
 
           # --------------------------------------------------------
-          # master
+          # MANUAL RUN
+          #
+          # A manual run explicitly means:
+          #
+          # latest master
+          #      ↓
+          # sync into v2/src
+          #      ↓
+          # publish upm if necessary
+          #      ↓
+          # tag package
           # --------------------------------------------------------
 
-          if [ "${{ github.ref_name }}" = "master" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+
+            echo "Manual run detected."
+            echo "Latest master will be synchronized into v2."
+
             SYNC_MASTER=true
-          fi
 
           # --------------------------------------------------------
-          # v2
+          # NORMAL PUSH TO v2
           # --------------------------------------------------------
 
-          if [ "${{ github.ref_name }}" = "v2" ]; then
+          elif [ "${{ github.ref_name }}" = "v2" ]; then
 
-            # First publication.
+            # If UPM doesn't exist yet, force initial publication.
             if [ "$UPM_EXISTS" = "false" ]; then
 
-              echo "upm does not exist."
+              echo "upm branch does not exist."
               echo "Initial package publication will be performed."
 
               SRC_CHANGED=true
 
-            # Manual runs force publication.
-            elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-
-              echo "Manual v2 run detected."
-              SRC_CHANGED=true
-
-            # Normal push: only react to src/**.
             else
 
               BEFORE="${{ github.event.before }}"
@@ -161,9 +164,13 @@ jobs:
                 echo "Changes detected under src/**"
 
               else
+
                 echo "No changes detected under src/**"
+
               fi
+
             fi
+
           fi
 
           echo "sync_master=$SYNC_MASTER" >> "$GITHUB_OUTPUT"
@@ -173,18 +180,15 @@ jobs:
       # ----------------------------------------------------------
       # Determine upstream version
       #
-      # This is only used when master is synchronized.
+      # Used only when explicitly synchronizing master.
       #
       # Supports:
       #
       # v2.1.3 -> 2.1.3
       #
-      # Fallback:
+      # fallback:
       #
       # v2 -> 2.0.0
-      #
-      # The actual repository tag is NOT created from this step.
-      # Tagging later reads src/package.json instead.
       # ----------------------------------------------------------
 
       - name: Determine upstream version
@@ -207,18 +211,19 @@ jobs:
             VERSION="${MAJOR}.0.0"
 
           else
+
             echo "ERROR: Failed to extract version from master commit."
             exit 1
+
           fi
 
           echo "Upstream version: $VERSION"
-
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------
-      # Sync master -> v2
+      # Sync latest master -> v2
       #
-      # v2 is the editable source branch:
+      # This step NOW runs during workflow_dispatch.
       #
       # v2/
       # ├── README.md
@@ -236,181 +241,9 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          echo "Checking out latest v2..."
+
           git checkout -B v2 origin/v2
-
-          # --------------------------------------------------------
-          # src must already exist and contain package content.
-          # --------------------------------------------------------
-
-          if [ ! -d "src" ]; then
-            echo "ERROR: v2/src does not exist."
-            exit 1
-          fi
-
-          if [ -z "$(find src -mindepth 1 -print -quit)" ]; then
-            echo "ERROR: v2/src is empty."
-            exit 1
-          fi
-
-          # --------------------------------------------------------
-          # Update URLs.md from upstream master.
-          # --------------------------------------------------------
-
-          git checkout origin/master -- URLs.md
-
-          # --------------------------------------------------------
-          # Update Fonts from upstream master.
-          #
-          # Upstream:
-          #
-          # src/UnityMaterialSymbols/Assets/MaterialSymbols/Fonts
-          #
-          # v2:
-          #
-          # src/Fonts
-          # --------------------------------------------------------
-
-          TEMP_FONTS="$RUNNER_TEMP/upstream-fonts"
-
-          rm -rf "$TEMP_FONTS"
-          mkdir -p "$TEMP_FONTS"
-
-          git archive \
-            origin/master \
-            src/UnityMaterialSymbols/Assets/MaterialSymbols/Fonts \
-            | tar -x -C "$TEMP_FONTS"
-
-          mkdir -p src/Fonts
-
-          rsync -a --delete \
-            "$TEMP_FONTS/src/UnityMaterialSymbols/Assets/MaterialSymbols/Fonts/" \
-            "src/Fonts/"
-
-          # --------------------------------------------------------
-          # Update package.json version from upstream version.
-          #
-          # Tag creation later reads this file instead of deriving
-          # the tag from the upstream commit message.
-          # --------------------------------------------------------
-
-          if [ ! -f "src/package.json" ]; then
-            echo "ERROR: src/package.json does not exist."
-            exit 1
-          fi
-
-          jq \
-            --arg version "$VERSION" \
-            '.version = $version' \
-            src/package.json \
-            > "$RUNNER_TEMP/package.json"
-
-          mv \
-            "$RUNNER_TEMP/package.json" \
-            src/package.json
-
-          # --------------------------------------------------------
-          # Stage changes.
-          # --------------------------------------------------------
-
-          git add \
-            URLs.md \
-            src/
-
-          # Was package content changed?
-          if git diff --cached --quiet -- src/; then
-            SRC_CHANGED=false
-          else
-            SRC_CHANGED=true
-          fi
-
-          echo "src_changed=$SRC_CHANGED" >> "$GITHUB_OUTPUT"
-
-          # --------------------------------------------------------
-          # Dry run
-          # --------------------------------------------------------
-
-          if [ "$DRY_RUN" = "true" ]; then
-
-            echo
-            echo "DRY RUN: Changes that would be committed to v2:"
-            git status --short
-
-            echo
-            echo "Diff:"
-            git diff --cached
-
-            exit 0
-          fi
-
-          # --------------------------------------------------------
-          # Commit v2.
-          # --------------------------------------------------------
-
-          if git diff --cached --quiet; then
-
-            echo "No v2 changes to commit."
-
-          else
-
-            git commit \
-              -m "Sync upstream changes"
-
-            git push origin v2
-          fi
-
-      # ----------------------------------------------------------
-      # Determine whether UPM should be published
-      #
-      # master:
-      #   Publish when the master sync changed src/.
-      #
-      # v2:
-      #   Publish when src/** changed.
-      #
-      # First v2 run:
-      #   Publish because upm does not exist.
-      # ----------------------------------------------------------
-
-      - name: Determine whether UPM should be published
-        id: publish
-        shell: bash
-        run: |
-          SHOULD_PUBLISH=false
-
-          if [ "${{ steps.mode.outputs.sync_master }}" = "true" ]; then
-
-            if [ "${{ steps.sync_v2.outputs.src_changed }}" = "true" ]; then
-              SHOULD_PUBLISH=true
-            fi
-
-          elif [ "${{ steps.mode.outputs.src_changed }}" = "true" ]; then
-
-            SHOULD_PUBLISH=true
-          fi
-
-          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
-
-          echo "Publish UPM: $SHOULD_PUBLISH"
-
-      # ----------------------------------------------------------
-      # Prepare v2/src for deployment
-      # ----------------------------------------------------------
-
-      - name: Prepare package content
-        if: steps.publish.outputs.should_publish == 'true'
-        shell: bash
-        run: |
-          # --------------------------------------------------------
-          # When triggered directly from v2, checkout latest v2.
-          #
-          # During a master sync, we're already on the updated v2.
-          # --------------------------------------------------------
-
-          if [ "${{ steps.mode.outputs.sync_master }}" != "true" ]; then
-
-            git fetch origin v2
-            git checkout -B v2 origin/v2
-          fi
 
           # --------------------------------------------------------
           # Validate package source.
@@ -431,6 +264,231 @@ jobs:
             exit 1
           fi
 
+          # --------------------------------------------------------
+          # Update URLs.md from latest master.
+          # --------------------------------------------------------
+
+          echo "Synchronizing URLs.md..."
+
+          git checkout origin/master -- URLs.md
+
+          # --------------------------------------------------------
+          # Synchronize Fonts from latest master.
+          #
+          # Upstream:
+          #
+          # master:
+          # src/UnityMaterialSymbols/
+          #   Assets/MaterialSymbols/Fonts
+          #
+          # Destination:
+          #
+          # v2:
+          # src/Fonts
+          # --------------------------------------------------------
+
+          echo "Synchronizing Fonts..."
+
+          TEMP_FONTS="$RUNNER_TEMP/upstream-fonts"
+
+          rm -rf "$TEMP_FONTS"
+          mkdir -p "$TEMP_FONTS"
+
+          git archive \
+            origin/master \
+            src/UnityMaterialSymbols/Assets/MaterialSymbols/Fonts \
+            | tar -x -C "$TEMP_FONTS"
+
+          mkdir -p src/Fonts
+
+          rsync -a --delete \
+            "$TEMP_FONTS/src/UnityMaterialSymbols/Assets/MaterialSymbols/Fonts/" \
+            "src/Fonts/"
+
+          # --------------------------------------------------------
+          # Update package.json version.
+          # --------------------------------------------------------
+
+          echo "Updating package version to $VERSION..."
+
+          jq \
+            --arg version "$VERSION" \
+            '.version = $version' \
+            src/package.json \
+            > "$RUNNER_TEMP/package.json"
+
+          mv \
+            "$RUNNER_TEMP/package.json" \
+            src/package.json
+
+          # --------------------------------------------------------
+          # Stage synchronized content.
+          # --------------------------------------------------------
+
+          git add \
+            URLs.md \
+            src/
+
+          # --------------------------------------------------------
+          # Detect whether package source actually changed.
+          # --------------------------------------------------------
+
+          if git diff --cached --quiet -- src/; then
+
+            SRC_CHANGED=false
+            echo "No package changes detected under v2/src."
+
+          else
+
+            SRC_CHANGED=true
+            echo "Package changes detected under v2/src."
+
+          fi
+
+          echo "src_changed=$SRC_CHANGED" >> "$GITHUB_OUTPUT"
+
+          # --------------------------------------------------------
+          # Show changes.
+          # --------------------------------------------------------
+
+          echo
+          echo "Synchronized changes:"
+          git status --short
+
+          # --------------------------------------------------------
+          # Dry run.
+          # --------------------------------------------------------
+
+          if [ "$DRY_RUN" = "true" ]; then
+
+            echo
+            echo "DRY RUN: v2 changes would be:"
+            git diff --cached
+
+            exit 0
+
+          fi
+
+          # --------------------------------------------------------
+          # Commit and push v2.
+          #
+          # This includes URL-only changes as well.
+          # --------------------------------------------------------
+
+          if git diff --cached --quiet; then
+
+            echo "v2 is already synchronized."
+            echo "No v2 commit required."
+
+          else
+
+            git commit \
+              -m "Sync upstream changes"
+
+            git push origin v2
+
+            echo "v2 updated successfully."
+
+          fi
+
+      # ----------------------------------------------------------
+      # Determine whether UPM needs publishing.
+      #
+      # First publication:
+      #   Always publish if upm doesn't exist.
+      #
+      # Manual master sync:
+      #   Publish if v2/src changed.
+      #
+      # v2 push:
+      #   Publish if src/** changed.
+      # ----------------------------------------------------------
+
+      - name: Determine whether UPM should be published
+        id: publish
+        shell: bash
+        run: |
+          SHOULD_PUBLISH=false
+
+          # --------------------------------------------------------
+          # UPM doesn't exist yet:
+          # always create it.
+          # --------------------------------------------------------
+
+          if [ "${{ steps.mode.outputs.upm_exists }}" = "false" ]; then
+
+            SHOULD_PUBLISH=true
+
+          # --------------------------------------------------------
+          # Manual master sync.
+          # --------------------------------------------------------
+
+          elif [ "${{ steps.mode.outputs.sync_master }}" = "true" ]; then
+
+            if [ "${{ steps.sync_v2.outputs.src_changed }}" = "true" ]; then
+              SHOULD_PUBLISH=true
+            fi
+
+          # --------------------------------------------------------
+          # Normal v2 push.
+          # --------------------------------------------------------
+
+          elif [ "${{ steps.mode.outputs.src_changed }}" = "true" ]; then
+
+            SHOULD_PUBLISH=true
+
+          fi
+
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+          echo "Publish UPM: $SHOULD_PUBLISH"
+
+      # ----------------------------------------------------------
+      # Prepare latest v2/src package
+      # ----------------------------------------------------------
+
+      - name: Prepare package content
+        if: steps.publish.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          # --------------------------------------------------------
+          # During a normal v2 push, ensure latest remote v2.
+          #
+          # During manual master sync, we're already on the updated
+          # v2 working tree/commit.
+          # --------------------------------------------------------
+
+          if [ "${{ steps.mode.outputs.sync_master }}" != "true" ]; then
+
+            git fetch origin v2
+            git checkout -B v2 origin/v2
+
+          fi
+
+          # --------------------------------------------------------
+          # Validate source.
+          # --------------------------------------------------------
+
+          if [ ! -d "src" ]; then
+            echo "ERROR: v2/src does not exist."
+            exit 1
+          fi
+
+          if [ -z "$(find src -mindepth 1 -print -quit)" ]; then
+            echo "ERROR: v2/src is empty."
+            exit 1
+          fi
+
+          if [ ! -f "src/package.json" ]; then
+            echo "ERROR: src/package.json does not exist."
+            exit 1
+          fi
+
+          # --------------------------------------------------------
+          # Copy package into temporary storage before switching
+          # branches.
+          # --------------------------------------------------------
+
           PACKAGE_TEMP="$RUNNER_TEMP/upm-package"
 
           rm -rf "$PACKAGE_TEMP"
@@ -440,15 +498,11 @@ jobs:
             src/. \
             "$PACKAGE_TEMP/"
 
-          echo "Package contents:"
+          echo "Package contents prepared:"
           find "$PACKAGE_TEMP" -maxdepth 4 -print
 
       # ----------------------------------------------------------
-      # Publish v2/src -> upm
-      #
-      # upm becomes an exact mirror of v2/src.
-      #
-      # If upm doesn't exist yet, create it as an orphan branch.
+      # Publish v2/src -> upm root
       # ----------------------------------------------------------
 
       - name: Publish src to upm
@@ -461,7 +515,7 @@ jobs:
           PACKAGE_TEMP="$RUNNER_TEMP/upm-package"
 
           # --------------------------------------------------------
-          # Existing upm branch
+          # Existing UPM branch.
           # --------------------------------------------------------
 
           if git show-ref \
@@ -476,17 +530,17 @@ jobs:
               origin/upm
 
           # --------------------------------------------------------
-          # First publication
+          # First publication.
           # --------------------------------------------------------
 
           else
 
             echo "upm branch does not exist."
-            echo "Creating new orphan upm branch."
+            echo "Creating orphan upm branch."
 
             git checkout --orphan upm
-
             git rm -rf . || true
+
           fi
 
           # --------------------------------------------------------
@@ -506,13 +560,14 @@ jobs:
           git add --all
 
           # --------------------------------------------------------
-          # Already up to date.
+          # Already synchronized.
           # --------------------------------------------------------
 
           if git diff --cached --quiet; then
 
             echo "UPM package is already up to date."
             exit 0
+
           fi
 
           # --------------------------------------------------------
@@ -522,14 +577,14 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
 
             echo
-            echo "DRY RUN: Changes that would be published to upm:"
+            echo "DRY RUN: UPM changes would be:"
             git status --short
 
             echo
-            echo "Diff:"
             git diff --cached
 
             exit 0
+
           fi
 
           # --------------------------------------------------------
@@ -552,16 +607,16 @@ jobs:
 
           echo "published=true" >> "$GITHUB_OUTPUT"
 
+          echo "UPM package published successfully."
+
       # ----------------------------------------------------------
-      # Determine whether repository should be tagged.
+      # Decide whether tagging should run.
       #
-      # Tag only after UPM was actually pushed.
+      # Unlike the old version, tagging does NOT depend solely on
+      # whether a brand-new UPM commit was required.
       #
-      # The reusable tagging workflow will read:
-      #
-      # v2/src/package.json
-      #
-      # and tag the v2 commit.
+      # This means a missing tag can still be created when UPM
+      # already happens to be synchronized.
       # ----------------------------------------------------------
 
       - name: Determine whether package should be tagged
@@ -571,8 +626,21 @@ jobs:
         run: |
           SHOULD_TAG=false
 
-          if [ "${{ steps.publish_upm.outputs.published }}" = "true" ]; then
-            SHOULD_TAG=true
+          if [ "$DRY_RUN" != "true" ]; then
+
+            # Manual sync:
+            # always check package.json/tag afterwards.
+            if [ "${{ steps.mode.outputs.sync_master }}" = "true" ]; then
+
+              SHOULD_TAG=true
+
+            # Direct v2 src update.
+            elif [ "${{ steps.mode.outputs.src_changed }}" = "true" ]; then
+
+              SHOULD_TAG=true
+
+            fi
+
           fi
 
           echo "should_tag=$SHOULD_TAG" >> "$GITHUB_OUTPUT"
@@ -582,19 +650,22 @@ jobs:
   # ============================================================
   # TAG PACKAGE
   #
-  # Runs only after upm was successfully published.
+  # Runs after synchronization/publishing completes.
   #
-  # The tag points to v2, not upm.
-  #
-  # Version comes from:
+  # Reads:
   #
   # v2/src/package.json
+  #
+  # The reusable workflow should skip automatically when that
+  # version tag already exists.
   # ============================================================
 
   tag-package:
     needs: sync
 
-    if: needs.sync.outputs.should_tag == 'true'
+    if: |
+      needs.sync.result == 'success' &&
+      needs.sync.outputs.should_tag == 'true'
 
     uses: ebukaracer/gh-workflows/.github/workflows/tag-package.yml@main
 
